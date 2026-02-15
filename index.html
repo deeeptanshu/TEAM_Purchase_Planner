@@ -347,6 +347,7 @@
                 <div style="background: #e7f3ff; border-left: 4px solid #0066cc; padding: 15px; margin-top: 20px; border-radius: 4px;">
                     <strong style="color: #0066cc;">💡 Smart Defaults Applied:</strong>
                     <ul style="margin: 10px 0 0 20px; color: #495057; line-height: 1.8;">
+                        <li><strong>Smart Weekly Average:</strong> Blends Last Week (50%) + This Month avg (30%) + YTD avg (20%)</li>
                         <li><strong>Fast items (3+ weekly):</strong> Stock for delivery time + 0.5 extra weeks</li>
                         <li><strong>Medium items (1-2 weekly):</strong> Stock for delivery time + 1 extra week</li>
                         <li><strong>Slow items (0 sales):</strong> Keep 1-2 pieces for variety (only if historically sold)</li>
@@ -407,6 +408,8 @@
 
             <button class="btn" id="processBtn" disabled>🚀 Calculate What to Buy</button>
 
+            <div id="dateInfo"></div>
+
             <div id="errorContainer"></div>
 
             <!-- Results Section -->
@@ -427,13 +430,15 @@
                     <table id="resultsTable">
                         <thead>
                             <tr>
-                                <th>Brand / Make</th>
                                 <th>Design / SKU</th>
                                 <th>Speed Category</th>
                                 <th>YTD Sales</th>
                                 <th>Last Week</th>
+                                <th>Smart Avg/Week</th>
+                                <th>Item Rate (₹)</th>
                                 <th>Stock in Hand</th>
                                 <th>Order Quantity</th>
+                                <th>Order Value (₹)</th>
                             </tr>
                         </thead>
                         <tbody id="resultsBody"></tbody>
@@ -514,6 +519,17 @@
             const data = [];
             let headerFound = false;
             let headerIndex = -1;
+            let reportDates = { fromDate: null, toDate: null };
+
+            // Try to extract dates from report header
+            const fromDateMatch = text.match(/From Date\s*:\s*(\d{2}\/\w{3}\/\d{4})/i);
+            const toDateMatch = text.match(/To Date\s*:\s*(\d{2}\/\w{3}\/\d{4})/i);
+            
+            if (fromDateMatch && toDateMatch) {
+                reportDates.fromDate = parseReportDate(fromDateMatch[1]);
+                reportDates.toDate = parseReportDate(toDateMatch[1]);
+                console.log('Parsed dates:', reportDates);
+            }
 
             // Find the header row
             for (let i = 0; i < lines.length; i++) {
@@ -537,17 +553,67 @@
                 const line = lines[i].trim();
                 if (!line) continue;
 
+                // Skip Grand Total and footer rows
+                if (line.toLowerCase().includes('grand total') || 
+                    line.toLowerCase().includes('page -') ||
+                    line.match(/^\d{2}\/\d{2}\/\d{4}/)) {
+                    continue;
+                }
+
                 const values = parseCSVLine(line);
                 if (values.length >= headers.length) {
                     const row = {};
                     headers.forEach((header, index) => {
                         row[header.trim()] = values[index];
                     });
-                    data.push(row);
+                    
+                    // Additional validation: Skip if Department is empty or looks like a total
+                    if (row['Department'] && 
+                        row['Department'].trim() !== '' && 
+                        !row['Department'].toLowerCase().includes('total')) {
+                        data.push(row);
+                    }
                 }
             }
 
+            // Attach parsed dates to the data object
+            data.reportDates = reportDates;
+
             return data;
+        }
+
+        function parseReportDate(dateStr) {
+            // Parse format: "01/Feb/2026" or "01/Feb/26"
+            const months = {
+                'jan': 0, 'feb': 1, 'mar': 2, 'apr': 3, 'may': 4, 'jun': 5,
+                'jul': 6, 'aug': 7, 'sep': 8, 'oct': 9, 'nov': 10, 'dec': 11,
+                'january': 0, 'february': 1, 'march': 2, 'april': 3, 'may': 4, 'june': 5,
+                'july': 6, 'august': 7, 'september': 8, 'october': 9, 'november': 10, 'december': 11
+            };
+            
+            const parts = dateStr.split('/');
+            if (parts.length !== 3) return null;
+            
+            const day = parseInt(parts[0]);
+            const monthStr = parts[1].toLowerCase();
+            let year = parseInt(parts[2]);
+            
+            // Handle 2-digit years
+            if (year < 100) {
+                year += 2000;
+            }
+            
+            const month = months[monthStr];
+            if (month === undefined) return null;
+            
+            return new Date(year, month, day);
+        }
+
+        function calculateWeeksBetween(startDate, endDate) {
+            if (!startDate || !endDate) return null;
+            const diffTime = endDate - startDate;
+            const diffDays = diffTime / (1000 * 60 * 60 * 24);
+            return diffDays / 7;
         }
 
         function parseCSVLine(line) {
@@ -612,52 +678,92 @@
 
             const results = [];
 
+            // Calculate weeks dynamically from parsed dates
+            let ytdWeeks = 5.3; // Default fallback
+            let utmWeeks = 1;   // Default fallback
+            
+            if (currentData.reportDates && currentData.reportDates.fromDate && currentData.reportDates.toDate) {
+                const toDate = currentData.reportDates.toDate;
+                const fromDate = currentData.reportDates.fromDate;
+                
+                // Calculate YTD weeks (from Jan 1 of report year to report end date)
+                const yearStart = new Date(toDate.getFullYear(), 0, 1);
+                ytdWeeks = calculateWeeksBetween(yearStart, toDate);
+                
+                // Calculate UTM weeks (from 1st of current month to report end date)
+                const monthStart = new Date(toDate.getFullYear(), toDate.getMonth(), 1);
+                utmWeeks = calculateWeeksBetween(monthStart, toDate);
+                
+                console.log(`Calculated weeks - YTD: ${ytdWeeks.toFixed(2)}, UTM: ${utmWeeks.toFixed(2)}`);
+                
+                // Show info to user
+                const infoMsg = `📅 Report Period: ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()} | YTD: ${ytdWeeks.toFixed(1)} weeks | This Month: ${utmWeeks.toFixed(1)} weeks`;
+                document.getElementById('dateInfo').innerHTML = `<div style="background: #d1ecf1; border-left: 4px solid #0c5460; padding: 10px; margin: 15px 0; border-radius: 4px; color: #0c5460;">${infoMsg}</div>`;
+            } else {
+                console.log('No dates found in report, using default weeks');
+                document.getElementById('dateInfo').innerHTML = `<div style="background: #fff3cd; border-left: 4px solid #856404; padding: 10px; margin: 15px 0; border-radius: 4px; color: #856404;">⚠️ Could not parse dates from report. Using estimated weeks: YTD=${ytdWeeks}, UTM=${utmWeeks}</div>`;
+            }
+
             currentData.forEach(row => {
-                const weeklySale = cleanValue(row['PRD_SL  Qty.'], true);
+                const prdSlQty = cleanValue(row['PRD_SL  Qty.'], true); // Last week sales
+                const utmQty = cleanValue(row['UTM Qty.'], true); // This month sales
+                const ytdQty = cleanValue(row['YTD Qty.'], true); // Year to date sales
+                const ytdAmt = cleanValue(row['YTD Amt.']); // Year to date amount
                 const currentStock = cleanValue(row['Total Stk Qty.'], true);
-                const ytdQty = cleanValue(row['YTD Qty.'], true);
                 
                 const brand = row['Make'] || 'N/A';
                 const sku = row['Item Name'] || 'N/A';
+                const grade = row['Grade'] || 'N/A';
 
-                // Classify based on weekly sales
+                // Calculate item rate from YTD
+                const itemRate = ytdQty > 0 ? ytdAmt / ytdQty : 0;
+
+                // Calculate different time period rates
+                const lastWeekRate = prdSlQty; // Last week sales
+                const thisMonthWeeklyRate = utmWeeks > 0 ? utmQty / utmWeeks : 0; // This month weekly avg
+                const ytdWeeklyRate = ytdWeeks > 0 ? ytdQty / ytdWeeks : 0; // YTD weekly avg
+
+                // Smart weighted average (recent data weighted more heavily)
+                // 50% last week, 30% this month average, 20% YTD average
+                const smartWeeklyRate = 
+                    (lastWeekRate * 0.50) + 
+                    (thisMonthWeeklyRate * 0.30) + 
+                    (ytdWeeklyRate * 0.20);
+
+                // Classify based on smart weekly rate
                 let classification, classificationLabel, coverWeeks;
                 
-                if (weeklySale >= fastThreshold) {
+                if (smartWeeklyRate >= fastThreshold) {
                     classification = 'Fast';
                     classificationLabel = `Fast Mover (${fastThreshold}+ weekly)`;
                     coverWeeks = leadTime + fastExtraWeeks;
-                } else if (weeklySale >= mediumThreshold) {
+                } else if (smartWeeklyRate >= mediumThreshold) {
                     classification = 'Medium';
                     classificationLabel = `Medium Mover (${mediumThreshold}+ weekly)`;
                     coverWeeks = leadTime + mediumExtraWeeks;
                 } else {
                     classification = 'Slow';
                     classificationLabel = 'Slow Mover (Low/No sales)';
-                    coverWeeks = 0; // Will handle separately
+                    coverWeeks = 0;
                 }
 
                 let recommendedQty = 0;
 
                 if (classification === 'Slow') {
                     // Slow mover logic: Only order if stock is below threshold
-                    // This prevents ordering items with zero demand that already have stock
-                    // But ensures variety by maintaining minimum stock for items that historically sold
-                    
                     if (currentStock < slowStockThreshold) {
                         // If the item has sold in the past (YTD > 0), maintain minimum
                         if (ytdQty > 0 && slowMinOrder > 0) {
                             recommendedQty = Math.max(slowMinOrder - currentStock, 0);
                             if (recommendedQty < slowMinOrder && recommendedQty > 0) {
-                                recommendedQty = slowMinOrder; // Round up to minimum order
+                                recommendedQty = slowMinOrder;
                             }
                         }
                     }
-                    // If stock is above threshold or item never sold (YTD=0), don't order
                 } else {
                     // Fast and Medium mover logic
                     // Calculate expected demand with growth
-                    const adjustedDemand = weeklySale * (1 + growthPercent);
+                    const adjustedDemand = smartWeeklyRate * (1 + growthPercent);
                     
                     // Calculate target stock: demand over coverage period + safety buffer
                     const baseTargetStock = adjustedDemand * coverWeeks;
@@ -669,29 +775,36 @@
                     }
                 }
 
+                // Calculate estimated order value
+                const orderValue = recommendedQty * itemRate;
+
                 // Only include if recommended qty > 0
                 if (recommendedQty > 0) {
                     results.push({
                         brand,
                         sku,
+                        grade,
                         classification,
                         classificationLabel,
-                        weeklySale,
+                        lastWeekSale: prdSlQty,
+                        smartWeeklyRate: smartWeeklyRate,
                         ytdQty,
                         currentStock,
-                        recommendedQty
+                        itemRate,
+                        recommendedQty,
+                        orderValue
                     });
                 }
             });
 
             // Sort results: Fast movers first, then Medium, then Slow
+            // Within same category, sort by smart weekly rate descending
             results.sort((a, b) => {
                 const order = { 'Fast': 1, 'Medium': 2, 'Slow': 3 };
                 if (order[a.classification] !== order[b.classification]) {
                     return order[a.classification] - order[b.classification];
                 }
-                // Within same category, sort by weekly sales descending
-                return b.weeklySale - a.weeklySale;
+                return b.smartWeeklyRate - a.smartWeeklyRate;
             });
 
             processedResults = results;
@@ -710,6 +823,7 @@
             // Summary cards
             const totalItems = results.length;
             const totalQty = results.reduce((sum, r) => sum + r.recommendedQty, 0);
+            const totalValue = results.reduce((sum, r) => sum + r.orderValue, 0);
             const fastMovers = results.filter(r => r.classification === 'Fast').length;
             const mediumMovers = results.filter(r => r.classification === 'Medium').length;
             const slowMovers = results.filter(r => r.classification === 'Slow').length;
@@ -722,6 +836,10 @@
                 <div class="summary-card">
                     <h3>Total Pieces Needed</h3>
                     <div class="value">${totalQty}</div>
+                </div>
+                <div class="summary-card" style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);">
+                    <h3>💰 Total Investment</h3>
+                    <div class="value" style="font-size: 22px;">₹${totalValue.toLocaleString('en-IN', {maximumFractionDigits: 0})}</div>
                 </div>
                 <div class="summary-card" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%);">
                     <h3>🔥 High Priority</h3>
@@ -740,19 +858,118 @@
             `;
             document.getElementById('summaryCards').innerHTML = summaryHTML;
 
-            // Table
-            const tbody = document.getElementById('resultsBody');
-            tbody.innerHTML = results.map(r => `
-                <tr>
-                    <td>${r.brand}</td>
-                    <td>${r.sku}</td>
-                    <td><span class="badge badge-${r.classification.toLowerCase()}">${r.classificationLabel}</span></td>
-                    <td>${r.ytdQty.toFixed(0)}</td>
-                    <td><strong>${r.weeklySale.toFixed(1)}</strong></td>
-                    <td>${r.currentStock.toFixed(0)}</td>
-                    <td><strong style="color: #667eea; font-size: 16px;">${r.recommendedQty}</strong></td>
-                </tr>
-            `).join('');
+            // Function to determine rate range
+            function getRateRange(itemRate) {
+                if (itemRate === 0) return 'Price Not Available';
+                if (itemRate <= 500) return '₹1-500';
+                if (itemRate <= 1000) return '₹501-1000';
+                if (itemRate <= 1500) return '₹1001-1500';
+                if (itemRate <= 2000) return '₹1501-2000';
+                if (itemRate <= 2500) return '₹2001-2500';
+                if (itemRate <= 3000) return '₹2501-3000';
+                if (itemRate <= 4000) return '₹3001-4000';
+                if (itemRate <= 5000) return '₹4001-5000';
+                if (itemRate <= 6000) return '₹5001-6000';
+                if (itemRate <= 7000) return '₹6001-7000';
+                if (itemRate <= 8000) return '₹7001-8000';
+                if (itemRate <= 9000) return '₹8001-9000';
+                if (itemRate <= 10000) return '₹9001-10000';
+                return '₹10000+';
+            }
+
+            // Add rate range to each result
+            results.forEach(r => {
+                r.rateRange = getRateRange(r.itemRate);
+            });
+
+            // Group results by Rate Range → Brand
+            const grouped = {};
+            results.forEach(r => {
+                const rateRange = r.rateRange;
+                const brand = r.brand || 'N/A';
+                
+                if (!grouped[rateRange]) grouped[rateRange] = {};
+                if (!grouped[rateRange][brand]) grouped[rateRange][brand] = [];
+                
+                grouped[rateRange][brand].push(r);
+            });
+
+            // Define rate range order for sorting
+            const rateRangeOrder = {
+                '₹1-500': 1,
+                '₹501-1000': 2,
+                '₹1001-1500': 3,
+                '₹1501-2000': 4,
+                '₹2001-2500': 5,
+                '₹2501-3000': 6,
+                '₹3001-4000': 7,
+                '₹4001-5000': 8,
+                '₹5001-6000': 9,
+                '₹6001-7000': 10,
+                '₹7001-8000': 11,
+                '₹8001-9000': 12,
+                '₹9001-10000': 13,
+                '₹10000+': 14,
+                'Price Not Available': 15
+            };
+
+            // Build hierarchical table
+            let tableHTML = '';
+            
+            // Sort rate ranges
+            const sortedRanges = Object.keys(grouped).sort((a, b) => {
+                return (rateRangeOrder[a] || 999) - (rateRangeOrder[b] || 999);
+            });
+
+            sortedRanges.forEach(rateRange => {
+                const rangeItems = Object.values(grouped[rateRange]).flat();
+                const rangeQty = rangeItems.reduce((sum, r) => sum + r.recommendedQty, 0);
+                const rangeValue = rangeItems.reduce((sum, r) => sum + r.orderValue, 0);
+                
+                // Rate Range header row
+                tableHTML += `
+                    <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: bold;">
+                        <td colspan="9" style="padding: 15px; font-size: 16px;">
+                            💎 ${rateRange} (${rangeQty} pieces, ₹${rangeValue.toLocaleString('en-IN', {maximumFractionDigits: 0})})
+                        </td>
+                    </tr>
+                `;
+                
+                // Brands under this rate range
+                Object.keys(grouped[rateRange]).sort().forEach(brand => {
+                    const brandItems = grouped[rateRange][brand];
+                    const brandQty = brandItems.reduce((sum, r) => sum + r.recommendedQty, 0);
+                    const brandValue = brandItems.reduce((sum, r) => sum + r.orderValue, 0);
+                    
+                    // Brand header row
+                    tableHTML += `
+                        <tr style="background: #e8eaff; font-weight: 600;">
+                            <td colspan="9" style="padding: 12px 30px; font-size: 14px;">
+                                🏷️ ${brand} - ${brandQty} pieces (₹${brandValue.toLocaleString('en-IN', {maximumFractionDigits: 0})})
+                            </td>
+                        </tr>
+                    `;
+                    
+                    // Items under this brand
+                    brandItems.forEach(r => {
+                        tableHTML += `
+                            <tr>
+                                <td style="padding-left: 60px;">${r.sku}</td>
+                                <td><span class="badge badge-${r.classification.toLowerCase()}">${r.classificationLabel}</span></td>
+                                <td>${r.ytdQty.toFixed(0)}</td>
+                                <td>${r.lastWeekSale.toFixed(1)}</td>
+                                <td><strong>${r.smartWeeklyRate.toFixed(1)}</strong></td>
+                                <td>₹${r.itemRate.toFixed(2)}</td>
+                                <td>${r.currentStock.toFixed(0)}</td>
+                                <td><strong style="color: #667eea; font-size: 16px;">${r.recommendedQty}</strong></td>
+                                <td><strong>₹${r.orderValue.toLocaleString('en-IN', {maximumFractionDigits: 2})}</strong></td>
+                            </tr>
+                        `;
+                    });
+                });
+            });
+
+            document.getElementById('resultsBody').innerHTML = tableHTML;
         }
 
         function showError(message) {
@@ -771,19 +988,68 @@
         function downloadCSV() {
             if (!processedResults || processedResults.length === 0) return;
 
-            const headers = ['Brand', 'SKU', 'Classification', 'YTD_Sales', 'Weekly_Sale', 'Current_Stock', 'Recommended_Purchase_Qty'];
-            const csvContent = [
-                headers.join(','),
-                ...processedResults.map(r => [
-                    `"${r.brand}"`,
-                    `"${r.sku}"`,
-                    r.classification,
-                    r.ytdQty.toFixed(0),
-                    r.weeklySale.toFixed(2),
-                    r.currentStock.toFixed(2),
-                    r.recommendedQty
-                ].join(','))
-            ].join('\n');
+            // Helper to get rate range
+            function getRateRange(itemRate) {
+                if (itemRate === 0) return 'Price Not Available';
+                if (itemRate <= 500) return '₹1-500';
+                if (itemRate <= 1000) return '₹501-1000';
+                if (itemRate <= 1500) return '₹1001-1500';
+                if (itemRate <= 2000) return '₹1501-2000';
+                if (itemRate <= 2500) return '₹2001-2500';
+                if (itemRate <= 3000) return '₹2501-3000';
+                if (itemRate <= 4000) return '₹3001-4000';
+                if (itemRate <= 5000) return '₹4001-5000';
+                if (itemRate <= 6000) return '₹5001-6000';
+                if (itemRate <= 7000) return '₹6001-7000';
+                if (itemRate <= 8000) return '₹7001-8000';
+                if (itemRate <= 9000) return '₹8001-9000';
+                if (itemRate <= 10000) return '₹9001-10000';
+                return '₹10000+';
+            }
+
+            // Group by Rate Range and Brand
+            const grouped = {};
+            processedResults.forEach(r => {
+                const rateRange = getRateRange(r.itemRate);
+                const brand = r.brand || 'N/A';
+                if (!grouped[rateRange]) grouped[rateRange] = {};
+                if (!grouped[rateRange][brand]) grouped[rateRange][brand] = [];
+                grouped[rateRange][brand].push(r);
+            });
+
+            // Rate range order
+            const rateRangeOrder = {
+                '₹1-500': 1, '₹501-1000': 2, '₹1001-1500': 3, '₹1501-2000': 4,
+                '₹2001-2500': 5, '₹2501-3000': 6, '₹3001-4000': 7, '₹4001-5000': 8,
+                '₹5001-6000': 9, '₹6001-7000': 10, '₹7001-8000': 11, '₹8001-9000': 12,
+                '₹9001-10000': 13, '₹10000+': 14, 'Price Not Available': 15
+            };
+
+            let csvContent = 'Rate_Range,Brand,SKU,Classification,YTD_Sales,Last_Week,Smart_Weekly_Avg,Item_Rate,Current_Stock,Order_Qty,Order_Value\n';
+            
+            const sortedRanges = Object.keys(grouped).sort((a, b) => 
+                (rateRangeOrder[a] || 999) - (rateRangeOrder[b] || 999)
+            );
+
+            sortedRanges.forEach(rateRange => {
+                Object.keys(grouped[rateRange]).sort().forEach(brand => {
+                    grouped[rateRange][brand].forEach(r => {
+                        csvContent += [
+                            `"${rateRange}"`,
+                            `"${brand}"`,
+                            `"${r.sku}"`,
+                            r.classification,
+                            r.ytdQty.toFixed(0),
+                            r.lastWeekSale.toFixed(1),
+                            r.smartWeeklyRate.toFixed(1),
+                            r.itemRate.toFixed(2),
+                            r.currentStock.toFixed(0),
+                            r.recommendedQty,
+                            r.orderValue.toFixed(2)
+                        ].join(',') + '\n';
+                    });
+                });
+            });
 
             downloadFile(csvContent, 'purchase_plan.csv', 'text/csv');
         }
@@ -791,7 +1057,43 @@
         function downloadExcel() {
             if (!processedResults || processedResults.length === 0) return;
 
-            // Create HTML table for Excel
+            // Helper to get rate range
+            function getRateRange(itemRate) {
+                if (itemRate === 0) return 'Price Not Available';
+                if (itemRate <= 500) return '₹1-500';
+                if (itemRate <= 1000) return '₹501-1000';
+                if (itemRate <= 1500) return '₹1001-1500';
+                if (itemRate <= 2000) return '₹1501-2000';
+                if (itemRate <= 2500) return '₹2001-2500';
+                if (itemRate <= 3000) return '₹2501-3000';
+                if (itemRate <= 4000) return '₹3001-4000';
+                if (itemRate <= 5000) return '₹4001-5000';
+                if (itemRate <= 6000) return '₹5001-6000';
+                if (itemRate <= 7000) return '₹6001-7000';
+                if (itemRate <= 8000) return '₹7001-8000';
+                if (itemRate <= 9000) return '₹8001-9000';
+                if (itemRate <= 10000) return '₹9001-10000';
+                return '₹10000+';
+            }
+
+            // Group by Rate Range and Brand
+            const grouped = {};
+            processedResults.forEach(r => {
+                const rateRange = getRateRange(r.itemRate);
+                const brand = r.brand || 'N/A';
+                if (!grouped[rateRange]) grouped[rateRange] = {};
+                if (!grouped[rateRange][brand]) grouped[rateRange][brand] = [];
+                grouped[rateRange][brand].push(r);
+            });
+
+            // Rate range order
+            const rateRangeOrder = {
+                '₹1-500': 1, '₹501-1000': 2, '₹1001-1500': 3, '₹1501-2000': 4,
+                '₹2001-2500': 5, '₹2501-3000': 6, '₹3001-4000': 7, '₹4001-5000': 8,
+                '₹5001-6000': 9, '₹6001-7000': 10, '₹7001-8000': 11, '₹8001-9000': 12,
+                '₹9001-10000': 13, '₹10000+': 14, 'Price Not Available': 15
+            };
+
             let html = `
                 <html xmlns:x="urn:schemas-microsoft-com:office:excel">
                 <head>
@@ -813,30 +1115,70 @@
                     <table border="1">
                         <thead>
                             <tr style="background-color: #667eea; color: white; font-weight: bold;">
+                                <th>Rate Range</th>
                                 <th>Brand</th>
                                 <th>SKU</th>
                                 <th>Classification</th>
                                 <th>YTD Sales</th>
-                                <th>Last Week Sale</th>
+                                <th>Last Week</th>
+                                <th>Smart Weekly Avg</th>
+                                <th>Item Rate (₹)</th>
                                 <th>Current Stock</th>
-                                <th>Recommended Qty</th>
+                                <th>Order Qty</th>
+                                <th>Order Value (₹)</th>
                             </tr>
                         </thead>
                         <tbody>
             `;
 
-            processedResults.forEach(r => {
+            const sortedRanges = Object.keys(grouped).sort((a, b) => 
+                (rateRangeOrder[a] || 999) - (rateRangeOrder[b] || 999)
+            );
+
+            sortedRanges.forEach(rateRange => {
+                const rangeItems = Object.values(grouped[rateRange]).flat();
+                const rangeQty = rangeItems.reduce((sum, r) => sum + r.recommendedQty, 0);
+                const rangeValue = rangeItems.reduce((sum, r) => sum + r.orderValue, 0);
+                
+                // Rate Range summary row
                 html += `
-                    <tr>
-                        <td>${r.brand}</td>
-                        <td>${r.sku}</td>
-                        <td>${r.classification}</td>
-                        <td>${r.ytdQty.toFixed(0)}</td>
-                        <td>${r.weeklySale.toFixed(2)}</td>
-                        <td>${r.currentStock.toFixed(2)}</td>
-                        <td>${r.recommendedQty}</td>
+                    <tr style="background-color: #667eea; color: white; font-weight: bold;">
+                        <td colspan="11">${rateRange} - Total: ${rangeQty} pieces, ₹${rangeValue.toLocaleString('en-IN', {maximumFractionDigits: 0})}</td>
                     </tr>
                 `;
+                
+                Object.keys(grouped[rateRange]).sort().forEach(brand => {
+                    const brandItems = grouped[rateRange][brand];
+                    const brandQty = brandItems.reduce((sum, r) => sum + r.recommendedQty, 0);
+                    const brandValue = brandItems.reduce((sum, r) => sum + r.orderValue, 0);
+                    
+                    // Brand summary row
+                    html += `
+                        <tr style="background-color: #e8eaff; font-weight: bold;">
+                            <td>${rateRange}</td>
+                            <td colspan="10">${brand} - ${brandQty} pieces, ₹${brandValue.toLocaleString('en-IN', {maximumFractionDigits: 0})}</td>
+                        </tr>
+                    `;
+                    
+                    // Items
+                    brandItems.forEach(r => {
+                        html += `
+                            <tr>
+                                <td>${rateRange}</td>
+                                <td>${brand}</td>
+                                <td>${r.sku}</td>
+                                <td>${r.classification}</td>
+                                <td>${r.ytdQty.toFixed(0)}</td>
+                                <td>${r.lastWeekSale.toFixed(1)}</td>
+                                <td>${r.smartWeeklyRate.toFixed(1)}</td>
+                                <td>${r.itemRate.toFixed(2)}</td>
+                                <td>${r.currentStock.toFixed(0)}</td>
+                                <td><strong>${r.recommendedQty}</strong></td>
+                                <td><strong>${r.orderValue.toFixed(2)}</strong></td>
+                            </tr>
+                        `;
+                    });
+                });
             });
 
             html += `
