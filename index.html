@@ -317,13 +317,26 @@
                 <p style="color: #6c757d; margin-bottom: 20px; font-size: 14px;">
                     Drag and drop your CSV file here, or click the button below to browse
                 </p>
+                
+                <div style="background: #f0f2ff; border: 1px solid #667eea; border-radius: 6px; padding: 12px; margin-bottom: 15px;">
+                    <strong style="color: #667eea;">✨ Supports Both Report Types:</strong>
+                    <div style="display: flex; gap: 20px; margin-top: 8px; flex-wrap: wrap;">
+                        <div style="color: #495057; font-size: 13px;">
+                            🔵 <strong>RETAIL:</strong> Uses "Pur. Rate" column
+                        </div>
+                        <div style="color: #495057; font-size: 13px;">
+                            🔴 <strong>WHOLESALE:</strong> Uses "L.Pur Rate" column
+                        </div>
+                    </div>
+                </div>
+                
                 <div class="file-input-wrapper">
                     <input type="file" id="fileInput" accept=".csv" />
                     <label class="file-input-label">📂 Choose CSV File</label>
                 </div>
                 <div class="file-name" id="fileName">No file selected</div>
                 <p style="color: #6c757d; margin-top: 15px; font-size: 13px;">
-                    Supported format: YTD Register CSV with columns like Make, Item Name, PRD_SL Qty., etc.
+                    Supported format: YTD Register CSV (Retail or Wholesale)
                 </p>
             </div>
 
@@ -522,6 +535,7 @@
             let headerFound = false;
             let headerIndex = -1;
             let reportDates = { fromDate: null, toDate: null };
+            let reportType = 'unknown';
 
             // Try to extract dates from report header
             const fromDateMatch = text.match(/From Date\s*:\s*(\d{2}\/\w{3}\/\d{4})/i);
@@ -533,11 +547,20 @@
                 console.log('Parsed dates:', reportDates);
             }
 
-            // Find the header row
+            // Find the header row and detect report type
             for (let i = 0; i < lines.length; i++) {
                 if (lines[i].includes('Department') && lines[i].includes('Make') && lines[i].includes('Item Name')) {
                     headerIndex = i;
                     headerFound = true;
+                    
+                    // Detect report type based on header columns
+                    if (lines[i].includes('L.Pur Rate')) {
+                        reportType = 'wholesale';
+                        console.log('Detected: WHOLESALE report');
+                    } else if (lines[i].includes('Pur. Rate')) {
+                        reportType = 'retail';
+                        console.log('Detected: RETAIL report');
+                    }
                     break;
                 }
             }
@@ -578,8 +601,9 @@
                 }
             }
 
-            // Attach parsed dates to the data object
+            // Attach parsed dates and report type to the data object
             data.reportDates = reportDates;
+            data.reportType = reportType;
 
             return data;
         }
@@ -640,9 +664,16 @@
         }
 
         function cleanValue(value, isQuantity = false) {
-            if (value === null || value === undefined || value === '') return 0;
+            if (value === null || value === undefined || value === '' || value === '-') return 0;
             
-            const num = parseFloat(value);
+            // Remove quotes, commas, and whitespace
+            let cleaned = String(value)
+                .replace(/"/g, '')      // Remove quotes
+                .replace(/'/g, '')      // Remove single quotes
+                .replace(/,/g, '')      // Remove commas
+                .trim();                // Remove whitespace
+            
+            const num = parseFloat(cleaned);
             
             if (isNaN(num)) return 0;
             
@@ -706,9 +737,14 @@
                 console.log(`Financial Year Start: ${fiscalYearStart.toDateString()}`);
                 console.log(`Calculated weeks - YTD: ${ytdWeeks.toFixed(2)}, UTM: ${utmWeeks.toFixed(2)}`);
                 
+                // Determine report type label
+                const reportTypeLabel = currentData.reportType === 'wholesale' ? 'WHOLESALE' : 
+                                       currentData.reportType === 'retail' ? 'RETAIL' : 'UNKNOWN';
+                const reportTypeColor = currentData.reportType === 'wholesale' ? '#ff6b6b' : '#667eea';
+                
                 // Show info to user
-                const infoMsg = `📅 Report: ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()} | FY Start: ${fiscalYearStart.toLocaleDateString()} | YTD: ${ytdWeeks.toFixed(1)} weeks | This Month: ${utmWeeks.toFixed(1)} weeks`;
-                document.getElementById('dateInfo').innerHTML = `<div style="background: #d1ecf1; border-left: 4px solid #0c5460; padding: 10px; margin: 15px 0; border-radius: 4px; color: #0c5460;">${infoMsg}</div>`;
+                const infoMsg = `📊 <strong style="color: ${reportTypeColor};">${reportTypeLabel} Report</strong> | ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()} | FY Start: ${fiscalYearStart.toLocaleDateString()} | YTD: ${ytdWeeks.toFixed(1)} weeks | This Month: ${utmWeeks.toFixed(1)} weeks`;
+                document.getElementById('dateInfo').innerHTML = `<div style="background: #d1ecf1; border-left: 4px solid ${reportTypeColor}; padding: 10px; margin: 15px 0; border-radius: 4px; color: #0c5460;">${infoMsg}</div>`;
             } else {
                 console.log('No dates found in report, using default weeks');
                 document.getElementById('dateInfo').innerHTML = `<div style="background: #fff3cd; border-left: 4px solid #856404; padding: 10px; margin: 15px 0; border-radius: 4px; color: #856404;">⚠️ Could not parse dates from report. Using estimated weeks: YTD=${ytdWeeks}, UTM=${utmWeeks}</div>`;
@@ -718,15 +754,30 @@
                 const prdSlQty = cleanValue(row['PRD_SL  Qty.'], true); // Last week sales
                 const utmQty = cleanValue(row['UTM Qty.'], true); // This month sales
                 const ytdQty = cleanValue(row['YTD Qty.'], true); // Financial year to date sales
-                const ytdAmt = cleanValue(row['YTD Amt.']); // Year to date amount
+                
+                // Handle both Retail and Wholesale YTD Amount column names
+                const ytdAmt = cleanValue(row['YTD Amt.']) || cleanValue(row['YDT Amt.']); // YDT Amt in wholesale
+                
                 const currentStock = cleanValue(row['Total Stk Qty.'], true);
                 
                 const brand = row['Make'] || 'N/A';
                 const sku = row['Item Name'] || 'N/A';
                 const grade = row['Grade'] || 'N/A';
 
-                // Calculate item rate from YTD
-                const itemRate = ytdQty > 0 ? ytdAmt / ytdQty : 0;
+                // Calculate item rate based on report type
+                let itemRate = 0;
+                
+                if (currentData.reportType === 'wholesale') {
+                    // WHOLESALE: Use L.Pur Rate directly (last purchase rate)
+                    itemRate = cleanValue(row['L.Pur Rate']);
+                } else {
+                    // RETAIL: Calculate from YTD (average selling rate)
+                    if (ytdQty > 0 && ytdAmt > 0) {
+                        itemRate = ytdAmt / ytdQty;
+                    }
+                    // Note: "Pur. Rate" in retail reports is last purchase rate, not selling rate
+                    // We need YTD Amt ÷ YTD Qty for accurate item rate
+                }
 
                 // Calculate different time period rates
                 const lastWeekRate = prdSlQty; // Last week sales
